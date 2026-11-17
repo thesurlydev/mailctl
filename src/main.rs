@@ -148,6 +148,16 @@ const DEFAULT_BODY_LIMIT: usize = 20_000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // A caller that closes the pipe early (`| head`) is normal for a CLI, and
+    // the default Rust behavior is a panic on the failed write. Dying quietly
+    // is the right behavior here.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !info.to_string().contains("Broken pipe") {
+            default_hook(info);
+        }
+    }));
+
     let cli = Cli::parse();
     let account = Account::load().context("loading account settings")?;
 
@@ -189,8 +199,8 @@ async fn main() -> Result<()> {
                     println!(
                         "{:>6}  {:<28}  {:<38}  {}",
                         r.uid,
-                        truncate(&r.from, 28),
-                        truncate(&r.subject, 38),
+                        truncate(&sender_label(&r.from), 26),
+                        truncate(&r.subject, 40),
                         r.date.clone().unwrap_or_default()
                     );
                 }
@@ -232,8 +242,8 @@ async fn main() -> Result<()> {
                     println!(
                         "{:>6}  {:<28}  {:<38}  {}",
                         r.uid,
-                        truncate(&r.from, 28),
-                        truncate(&r.subject, 38),
+                        truncate(&sender_label(&r.from), 26),
+                        truncate(&r.subject, 40),
                         r.date.clone().unwrap_or_default()
                     );
                 }
@@ -303,6 +313,22 @@ fn print_message(msg: &Message) {
     }
 }
 
+/// The name part of `Name <addr>`, or the address when there is no name, so a
+/// narrow column shows who sent it instead of cutting an address in half.
+fn sender_label(from: &str) -> String {
+    match (from.find('<'), from.find('>')) {
+        (Some(a), Some(b)) if b > a => {
+            let name = from[..a].trim();
+            if name.is_empty() {
+                from[a + 1..b].trim().to_string()
+            } else {
+                name.to_string()
+            }
+        }
+        _ => from.to_string(),
+    }
+}
+
 fn truncate(s: &str, n: usize) -> String {
     let one = s.replace(['\n', '\r'], " ");
     let mut out: String = one.chars().take(n).collect();
@@ -338,6 +364,17 @@ mod tests {
         );
         assert_eq!(address_only("ada@example.com"), "ada@example.com");
         assert_eq!(address_only("  spaced@example.com  "), "spaced@example.com");
+    }
+
+    #[test]
+    fn sender_label_prefers_the_display_name() {
+        assert_eq!(
+            sender_label("Ada Lovelace <ada@example.com>"),
+            "Ada Lovelace"
+        );
+        assert_eq!(sender_label("<bare@example.com>"), "bare@example.com");
+        assert_eq!(sender_label("bare@example.com"), "bare@example.com");
+        assert_eq!(sender_label(""), "");
     }
 
     #[test]

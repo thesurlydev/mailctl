@@ -197,8 +197,15 @@ async fn fetch_rows(session: &mut ImapSession, uids: &[Uid]) -> Result<Vec<Messa
         .collect::<Vec<_>>()
         .join(",");
 
+    // Headers are fetched raw and parsed with a MIME parser rather than read
+    // from IMAP's ENVELOPE, because ENVELOPE returns RFC 2047 encoded words
+    // (utf-8?Q?...?=) verbatim. Parsing decodes the subject and the display
+    // names, which is what a reader expects to see.
     let fetches: Vec<_> = session
-        .uid_fetch(set, "(UID FLAGS ENVELOPE INTERNALDATE)")
+        .uid_fetch(
+            set,
+            "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])",
+        )
         .await
         .context("fetching message headers")?
         .try_collect()
@@ -207,44 +214,27 @@ async fn fetch_rows(session: &mut ImapSession, uids: &[Uid]) -> Result<Vec<Messa
 
     let mut rows: Vec<MessageRow> = fetches
         .iter()
-        .map(|f| {
-            let env = f.envelope();
-            let from = env
-                .and_then(|e| e.from.as_ref())
-                .and_then(|froms| froms.first())
-                .map(|a| {
-                    let name = a
-                        .name
-                        .as_ref()
-                        .map(|n| String::from_utf8_lossy(n).to_string());
-                    let addr = a
-                        .mailbox
-                        .as_ref()
-                        .map(|m| String::from_utf8_lossy(m).to_string());
-                    match (name, addr) {
-                        (Some(n), Some(m)) => format!("{n} <{m}@{}>", host_of(a)),
-                        (None, Some(m)) => format!("{m}@{}", host_of(a)),
-                        _ => String::new(),
-                    }
-                })
-                .unwrap_or_default();
-            let subject = env
-                .and_then(|e| e.subject.as_ref())
-                .map(|s| String::from_utf8_lossy(s).to_string())
-                .unwrap_or_default();
-            let date = f
-                .internal_date()
-                .map(|d| d.format("%Y-%m-%d %H:%M").to_string());
-            let seen = f.flags().any(|fl| matches!(fl, Flag::Seen));
-            let flagged = f.flags().any(|fl| matches!(fl, Flag::Flagged));
-            MessageRow {
+        .filter_map(|f| {
+            let raw = f.header()?;
+            let parsed = mail_parser::MessageParser::default().parse(raw)?;
+            Some(MessageRow {
                 uid: f.uid.unwrap_or(0),
-                from,
-                subject,
-                date,
-                seen,
-                flagged,
-            }
+                from: parsed
+                    .from()
+                    .and_then(|list| {
+                        list.iter().find_map(|a| match a {
+                            mail_parser::Address::Mailbox(m) => format_address(&m),
+                            _ => None,
+                        })
+                    })
+                    .unwrap_or_default(),
+                subject: parsed.subject().unwrap_or_default().to_string(),
+                date: f
+                    .internal_date()
+                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
+                seen: f.flags().any(|fl| matches!(fl, Flag::Seen)),
+                flagged: f.flags().any(|fl| matches!(fl, Flag::Flagged)),
+            })
         })
         .collect();
 
@@ -252,11 +242,13 @@ async fn fetch_rows(session: &mut ImapSession, uids: &[Uid]) -> Result<Vec<Messa
     Ok(rows)
 }
 
-fn host_of(a: &async_imap::imap_proto::Address<'_>) -> String {
-    a.host
-        .as_ref()
-        .map(|h| String::from_utf8_lossy(h).to_string())
-        .unwrap_or_default()
+/// `Name <addr>`, or just the address when the display name is absent.
+fn format_address(m: &mail_parser::Mailbox<'_>) -> Option<String> {
+    let addr = m.address()?;
+    match m.name() {
+        Some(name) if !name.is_empty() => Some(format!("{name} <{addr}>")),
+        _ => Some(addr.to_string()),
+    }
 }
 
 /// One message in full, with the body decoded and attachments named.
@@ -323,9 +315,42 @@ pub async fn read(
     Ok(crate::Message {
         uid,
         mailbox: mailbox.to_string(),
-        from: env.map(fmt_from).unwrap_or_default(),
-        to: env.map(fmt_recipients).unwrap_or_default(),
-        cc: String::new(),
+        from: parsed
+            .from()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|a| match a {
+                        mail_parser::Address::Mailbox(m) => format_address(&m),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default(),
+        to: parsed
+            .to()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|a| match a {
+                        mail_parser::Address::Mailbox(m) => format_address(&m),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default(),
+        cc: parsed
+            .cc()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|a| match a {
+                        mail_parser::Address::Mailbox(m) => format_address(&m),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default(),
         subject: env
             .and_then(|e| e.subject.as_ref())
             .map(|s| String::from_utf8_lossy(s).to_string())
@@ -340,32 +365,6 @@ pub async fn read(
         attachments,
         truncated,
     })
-}
-
-fn fmt_from(e: &async_imap::imap_proto::Envelope<'_>) -> String {
-    e.from
-        .as_ref()
-        .and_then(|f| f.first())
-        .map(|a| {
-            let name = a
-                .name
-                .as_ref()
-                .map(|n| String::from_utf8_lossy(n).to_string());
-            let mb = a
-                .mailbox
-                .as_ref()
-                .map(|m| String::from_utf8_lossy(m).to_string());
-            match (name, mb) {
-                (Some(n), Some(m)) => format!("{n} <{m}@{}>", host_of(a)),
-                (None, Some(m)) => format!("{m}@{}", host_of(a)),
-                _ => String::new(),
-            }
-        })
-        .unwrap_or_default()
-}
-
-fn fmt_recipients(_e: &async_imap::imap_proto::Envelope<'_>) -> String {
-    String::new()
 }
 
 /// A crude HTML-to-text pass: enough to read a newsletter, not a renderer.

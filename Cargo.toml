@@ -2,35 +2,41 @@
 name = "mailctl"
 version = "0.1.0"
 edition = "2024"
-description = "Read and send mail through Proton Mail Bridge"
+rust-version = "1.98"
+description = "Read and send Proton Mail through Proton Mail Bridge, built to be driven by AI agents"
 authors = ["Shane Witbeck <shane@surly.dev>"]
 license = "MIT"
+readme = "README.md"
 repository = "https://github.com/thesurlydev/mailctl"
+keywords = ["proton", "mail", "imap", "cli", "agents"]
+categories = ["command-line-utilities", "email"]
 
 [dependencies]
-# IMAP is the read path; Bridge speaks plain IMAP on loopback, so no TLS stack
-# is needed for it. `async-imap` is the maintained client (the `imap` crate's
-# stable release is from 2021 and 3.0 has been alpha since 2023).
+# IMAP is the read path. `async-imap` is the maintained client (the `imap`
+# crate's stable release is from 2021 and 3.0 has been alpha since 2023). It is
+# transport-agnostic, so TLS comes from rustls below.
 async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
-async-native-tls = { version = "0.5", default-features = false, features = ["runtime-tokio"] }
+# One TLS stack for both protocols: rustls with the aws-lc-rs provider and the
+# bundled Mozilla roots (`webpki-roots`), plus an optional per-endpoint CA file
+# for Bridge's self-signed certificate. No OpenSSL, so Linux needs no libssl-dev.
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
+webpki-roots = "1"
 # SMTP submission for the send path.
-# `rustls` needs an explicit crypto provider and trust source in lettre 0.11;
-# aws-lc-rs matches what the rest of this machine uses, and the platform
-# verifier keeps the system trust store authoritative.
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "tokio1-rustls", "aws-lc-rs", "webpki-roots"] }
 # MIME and header parsing for message bodies.
 mail-parser = "1.0"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "io-std", "process", "time"] }
 futures-util = "0.3"
 anyhow = "1"
 jiff = "0.2"
 toml = "0.8"
 
 [profile.release]
-# Compile speed and disk over binary size, per the engineering rules.
+# Favor compile speed and a small target/ over binary size.
 debug = false
 incremental = true
 codegen-units = 16

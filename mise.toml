@@ -14,6 +14,10 @@ run = "cargo clippy --all-targets -- -D warnings"
 description = "Check formatting"
 run = "cargo fmt --check"
 
+[tasks.msrv]
+description = "Check the build on the minimum supported Rust (rust-version in Cargo.toml)"
+run = "cargo +1.98 check --all-targets --locked"
+
 [tasks.gate]
 description = "Everything a change must pass"
 run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test"

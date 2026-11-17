@@ -1,0 +1,23 @@
+[tasks.build]
+description = "Build the release binary"
+run = "cargo build --release"
+
+[tasks.test]
+description = "Run the test suite"
+run = "cargo test"
+
+[tasks.clippy]
+description = "Lint with warnings denied"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks.fmt]
+description = "Check formatting"
+run = "cargo fmt --check"
+
+[tasks.gate]
+description = "Everything a change must pass"
+run = "cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test"
+
+[tasks.install]
+description = "Install mailctl into ~/.cargo/bin"
+run = "cargo build --release && cp target/release/mailctl ~/.cargo/bin/mailctl"

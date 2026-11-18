@@ -189,6 +189,11 @@ being talked into doing damage.
   Cc and Bcc address must match an entry (a full address, or `@domain` for anyone at exactly that domain).
 - **Preview before sending.** `send --dry-run` validates the addresses, applies the policy, and prints the
   message, with no password and no network.
+- **Mail cannot drive your terminal.** Without `--json`, every field written by a sender is printed with its
+  control characters (escape sequences, carriage returns, bidi overrides) shown as the replacement character
+  U+FFFD, so a message cannot rewrite the screen, set the window title or reorder what you read. The
+  `send --dry-run` preview and error messages are cleaned the same way, so nothing in a message you are about
+  to approve can hide. JSON output is unchanged: it carries the text exactly, escaped by the encoder.
 - **Untrusted text stays data.** A message body can contain instructions aimed at whatever reads it. See
   [AGENTS.md](AGENTS.md) for the rules an agent should follow, and [SECURITY.md](SECURITY.md) for the threat
   model and what is out of scope.

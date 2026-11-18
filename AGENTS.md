@@ -117,6 +117,9 @@ Bridge running and the password in the keychain.
 - **JSON field names and exit codes are the public contract.** A change to `model.rs` or `error.rs` is a
   breaking change: update the tests, the README and the tables in this file together.
 - **`--json` keeps stdout to one JSON value, failures included.** Nothing else may print to stdout.
+- **Text output never passes a terminal control through.** Every sender-written field goes through
+  `output::line` or `output::block`, which show controls and bidi overrides as U+FFFD; so do the dry-run
+  preview and error lines. JSON is left exact, since the encoder escapes it.
 - **The password stays secret.** It lives in `Secret`, whose `Debug` redacts it. Do not store it in a
   plain `String` field, print it, or put it in an error message. `whoami` and `send --dry-run` must not
   need it.

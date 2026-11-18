@@ -194,7 +194,9 @@ fn report(err: &anyhow::Error, json: bool) -> u8 {
             let _ = output::emit(&text);
         }
     } else {
-        eprintln!("error: {message}");
+        // An error can quote the server or a mailbox name, so it is cleaned
+        // for the terminal like any other text.
+        eprintln!("error: {}", output::block(&message));
     }
     kind.exit_code()
 }
@@ -405,20 +407,32 @@ fn preview(draft: &smtp::Draft, json: bool) -> Result<String> {
             body: &draft.body,
         });
     }
+    // The person approving the send reads this, and the body may quote mail an
+    // agent read, so a control character shows as U+FFFD instead of hiding
+    // part of what would be sent.
     let mut s = String::from("dry run: nothing was sent\n");
-    s.push_str(&format!("From:    {}\n", draft.from));
-    s.push_str(&format!("To:      {}\n", draft.to.join(", ")));
+    s.push_str(&format!("From:    {}\n", output::line(&draft.from)));
+    s.push_str(&format!(
+        "To:      {}\n",
+        output::line(&draft.to.join(", "))
+    ));
     if !draft.cc.is_empty() {
-        s.push_str(&format!("Cc:      {}\n", draft.cc.join(", ")));
+        s.push_str(&format!(
+            "Cc:      {}\n",
+            output::line(&draft.cc.join(", "))
+        ));
     }
     if !draft.bcc.is_empty() {
-        s.push_str(&format!("Bcc:     {}\n", draft.bcc.join(", ")));
+        s.push_str(&format!(
+            "Bcc:     {}\n",
+            output::line(&draft.bcc.join(", "))
+        ));
     }
     s.push_str(&format!(
         "Subject: {}\n{}\n{}\n",
-        draft.subject,
+        output::line(&draft.subject),
         "-".repeat(60),
-        draft.body
+        output::block(&draft.body)
     ));
     Ok(s)
 }

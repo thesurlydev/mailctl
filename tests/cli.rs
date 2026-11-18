@@ -425,6 +425,24 @@ fn mailbox() -> Vec<Seed> {
             "<p>Unread and <a href=\"https://jobs.example.com/view/7?trk=a&amp;ref=b\">flagged</a>.</p>",
             "\\Flagged",
         ),
+        // Hostile terminal input, reachable only by UID so list and search
+        // results stay as they are: an encoded title-setting escape in the
+        // sender name, an encoded line break in the subject, and raw escapes,
+        // a carriage return and a bidi override in the body.
+        seed(
+            50,
+            "=?UTF-8?Q?Bank=1B]0;pwned=07?= <bank@example.com>",
+            "=?UTF-8?Q?Invoice=1B[2J=0D=0Aspoofed?=",
+            "Pay \u{1b}[31mnow\u{1b}[0m\rOVERWRITE\nsecond\tline \u{202e}txt.exe",
+            "",
+        ),
+        seed(
+            60,
+            "Links <links@example.com>",
+            "Links",
+            "<p><a href=\"https://x.example/\">click&#27;[2J here</a></p>",
+            "",
+        ),
     ]
 }
 
@@ -833,6 +851,83 @@ fn read_links_returns_the_anchors_of_an_html_message_only_when_asked() {
         text.contains("Links:\n  flagged  https://jobs.example.com/view/7?trk=a&ref=b"),
         "{text}"
     );
+}
+
+/// Characters that can move the cursor, rewrite the screen or reorder text
+/// in a terminal: every control character but a newline or tab, plus the
+/// Unicode bidi controls.
+fn terminal_controls(text: &str) -> Vec<char> {
+    text.chars()
+        .filter(|&c| {
+            (c.is_control() && c != '\n' && c != '\t')
+                || matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .collect()
+}
+
+#[test]
+fn text_output_strips_terminal_controls_that_json_keeps() {
+    let mut f = Fixture::new();
+    f.start_imap();
+    f.write_config("", "");
+
+    let out = run_f(&f, &["read", "50"], &password_env());
+    let text = text_ok(&out);
+    assert_eq!(terminal_controls(&text), Vec::<char>::new(), "{text:?}");
+    // Each control shows as U+FFFD, so nothing is hidden, and a line break in
+    // a header cannot start a line of its own.
+    assert!(
+        text.contains("From:    Bank\u{fffd}]0;pwned\u{fffd} <bank@example.com>\n"),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("Subject: Invoice\u{fffd}[2J spoofed\n"),
+        "{text:?}"
+    );
+    assert!(
+        text.contains(
+            "Pay \u{fffd}[31mnow\u{fffd}[0m\u{fffd}OVERWRITE\nsecond\tline \u{fffd}txt.exe"
+        ),
+        "{text:?}"
+    );
+
+    let out = run_f(&f, &["read", "60", "--links"], &password_env());
+    let text = text_ok(&out);
+    assert_eq!(terminal_controls(&text), Vec::<char>::new(), "{text:?}");
+    assert!(
+        text.contains("  click\u{fffd}[2J here  https://x.example/"),
+        "{text:?}"
+    );
+
+    // The person approving a send must see everything it would send.
+    let out = run_f(
+        &f,
+        &[
+            "send",
+            "--dry-run",
+            "--to",
+            "ada@example.com",
+            "--subject",
+            "Re: \u{1b}[8mhidden",
+            "--body",
+            "ok\u{1b}[8m then hidden\r\n",
+        ],
+        &[],
+    );
+    let text = text_ok(&out);
+    assert_eq!(terminal_controls(&text), Vec::<char>::new(), "{text:?}");
+    assert!(
+        text.contains("Subject: Re: \u{fffd}[8mhidden\n"),
+        "{text:?}"
+    );
+    assert!(text.contains("ok\u{fffd}[8m then hidden\n"), "{text:?}");
+
+    // JSON is data for a program, escaped by the encoder, so it keeps the
+    // message exactly as sent.
+    let out = run_f(&f, &["read", "50", "--json"], &password_env());
+    let v = json_ok(&out);
+    assert_eq!(v["subject"], "Invoice\u{1b}[2J\r\nspoofed");
+    assert!(v["body"].as_str().unwrap().contains("\u{1b}[31mnow"));
 }
 
 #[test]

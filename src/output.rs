@@ -36,7 +36,7 @@ pub fn folders(rows: &[FolderRow]) -> String {
             .filter(|u| *u > 0)
             .map(|u| format!("  {u} unread"))
             .unwrap_or_default();
-        let _ = writeln!(s, "{:<40} {:>7}{unread}", r.name, r.messages);
+        let _ = writeln!(s, "{:<40} {:>7}{unread}", line(&r.name), r.messages);
     }
     s
 }
@@ -50,28 +50,30 @@ pub fn message_rows(rows: &[MessageRow]) -> String {
             r.uid,
             truncate(&sender_label(&r.from), 26),
             truncate(&r.subject, 40),
-            r.date.clone().unwrap_or_default()
+            line(r.date.as_deref().unwrap_or_default())
         );
     }
     s
 }
 
+/// Everything in a message is written by its sender, so every field goes
+/// through `line` or `block` on its way to the terminal.
 pub fn message(msg: &Message) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "From:    {}", msg.from);
-    let _ = writeln!(s, "To:      {}", msg.to);
+    let _ = writeln!(s, "From:    {}", line(&msg.from));
+    let _ = writeln!(s, "To:      {}", line(&msg.to));
     if !msg.cc.is_empty() {
-        let _ = writeln!(s, "Cc:      {}", msg.cc);
+        let _ = writeln!(s, "Cc:      {}", line(&msg.cc));
     }
-    let _ = writeln!(s, "Subject: {}", msg.subject);
+    let _ = writeln!(s, "Subject: {}", line(&msg.subject));
     if let Some(d) = &msg.date {
-        let _ = writeln!(s, "Date:    {d}");
+        let _ = writeln!(s, "Date:    {}", line(d));
     }
     if !msg.attachments.is_empty() {
-        let _ = writeln!(s, "Files:   {}", msg.attachments.join(", "));
+        let _ = writeln!(s, "Files:   {}", line(&msg.attachments.join(", ")));
     }
     let _ = writeln!(s, "{}", "-".repeat(60));
-    let _ = writeln!(s, "{}", msg.body);
+    let _ = writeln!(s, "{}", block(&msg.body));
     if msg.truncated {
         let _ = writeln!(s, "\n[body truncated]");
     }
@@ -82,9 +84,9 @@ pub fn message(msg: &Message) -> String {
         }
         for l in links {
             if l.text.is_empty() {
-                let _ = writeln!(s, "  {}", l.url);
+                let _ = writeln!(s, "  {}", line(&l.url));
             } else {
-                let _ = writeln!(s, "  {}  {}", l.text, l.url);
+                let _ = writeln!(s, "  {}  {}", line(&l.text), line(&l.url));
             }
         }
     }
@@ -107,8 +109,62 @@ pub fn sender_label(from: &str) -> String {
     }
 }
 
+/// Text written by a stranger, made safe to print to a terminal on one line:
+/// a run of line breaks or tabs becomes one space (a folded header), and any
+/// other character that could drive the terminal shows as U+FFFD, so it is
+/// visible instead of acting or hiding.
+pub fn line(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_break = false;
+    for c in s.chars() {
+        if matches!(c, '\r' | '\n' | '\t') {
+            if !in_break {
+                out.push(' ');
+            }
+            in_break = true;
+            continue;
+        }
+        in_break = false;
+        out.push(if is_terminal_control(c) {
+            '\u{fffd}'
+        } else {
+            c
+        });
+    }
+    out
+}
+
+/// Like `line`, for a body: newlines and tabs are kept, and a CRLF line end
+/// becomes a newline. A lone carriage return, which would let the next text
+/// overwrite the line, shows as U+FFFD like every other control.
+pub fn block(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' if chars.peek() == Some(&'\n') => {}
+            '\n' | '\t' => out.push(c),
+            c if is_terminal_control(c) => out.push('\u{fffd}'),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A control character (escape, bell, carriage return, the C1 set) or a
+/// bidi control, which can reorder what the reader sees, for example to make
+/// `exe.txt` read as `txt.exe`.
+fn is_terminal_control(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// `line`, cut to `n` characters with an ellipsis when it was longer.
 pub fn truncate(s: &str, n: usize) -> String {
-    let one = s.replace(['\n', '\r'], " ");
+    let one = line(s);
     let mut out: String = one.chars().take(n).collect();
     if one.chars().count() > n {
         out.push('\u{2026}');
@@ -129,6 +185,39 @@ mod tests {
         assert_eq!(sender_label("<bare@example.com>"), "bare@example.com");
         assert_eq!(sender_label("bare@example.com"), "bare@example.com");
         assert_eq!(sender_label(""), "");
+    }
+
+    #[test]
+    fn line_folds_breaks_and_shows_controls() {
+        assert_eq!(line("a\r\n\tb"), "a b");
+        assert_eq!(line("x\u{1b}[2Jy\u{7}"), "x\u{fffd}[2Jy\u{fffd}");
+        assert_eq!(line("C1\u{9b}31m"), "C1\u{fffd}31m");
+        assert_eq!(line("\u{202e}txt.exe"), "\u{fffd}txt.exe");
+        assert_eq!(line("Caf\u{e9} \u{2014} ok"), "Caf\u{e9} \u{2014} ok");
+    }
+
+    #[test]
+    fn block_keeps_lines_and_tabs_and_shows_a_lone_carriage_return() {
+        assert_eq!(block("a\r\nb\n\tc"), "a\nb\n\tc");
+        assert_eq!(block("safe\rOVER"), "safe\u{fffd}OVER");
+        assert_eq!(block("\u{1b}[31mred"), "\u{fffd}[31mred");
+    }
+
+    #[test]
+    fn message_rows_show_controls_and_stay_on_one_line() {
+        let rows = vec![MessageRow {
+            uid: 7,
+            from: "Evil\u{1b}]0;t\u{7} <e@example.com>".into(),
+            subject: "Hi\r\nthere\u{1b}[2J".into(),
+            date: Some("2026-11-17 09:30".into()),
+            seen: false,
+            flagged: false,
+        }];
+        let text = message_rows(&rows);
+        assert_eq!(text.lines().count(), 1);
+        assert!(text.contains("Evil\u{fffd}]0;t\u{fffd}"), "{text:?}");
+        assert!(text.contains("Hi there\u{fffd}[2J"), "{text:?}");
+        assert!(!text.chars().any(|c| c.is_control() && c != '\n'));
     }
 
     #[test]

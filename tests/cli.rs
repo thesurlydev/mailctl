@@ -377,13 +377,19 @@ struct Seed {
 }
 
 fn seed(uid: u32, from: &str, subject: &str, body: &str, flags: &'static str) -> Seed {
+    // A body that starts with a tag is sent as HTML.
+    let kind = if body.starts_with('<') {
+        "html"
+    } else {
+        "plain"
+    };
     Seed {
         uid,
         flags,
         raw: format!(
             "From: {from}\r\nTo: Me <me@example.com>\r\nSubject: {subject}\r\n\
              Date: Tue, 17 Nov 2026 09:30:00 +0000\r\nMessage-ID: <m{uid}@example.com>\r\n\
-             MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\
+             MIME-Version: 1.0\r\nContent-Type: text/{kind}; charset=utf-8\r\n\
              Content-Transfer-Encoding: 8bit\r\n\r\n{body}"
         ),
     }
@@ -416,7 +422,7 @@ fn mailbox() -> Vec<Seed> {
             40,
             "Flag <flag@example.com>",
             "Flagged",
-            "Unread and flagged.",
+            "<p>Unread and <a href=\"https://jobs.example.com/view/7?trk=a&amp;ref=b\">flagged</a>.</p>",
             "\\Flagged",
         ),
     ]
@@ -793,6 +799,40 @@ fn read_decodes_rfc2047_subject_and_display_name() {
     assert_eq!(v["uid"], 20);
     assert!(v["body"].as_str().unwrap().contains("Bonjour"));
     assert_eq!(v["truncated"], false);
+}
+
+#[test]
+fn read_links_returns_the_anchors_of_an_html_message_only_when_asked() {
+    let mut f = Fixture::new();
+    f.start_imap();
+    f.write_config("", "");
+
+    let out = run_f(&f, &["read", "40", "--json", "--links"], &password_env());
+    let v = json_ok(&out);
+    assert_eq!(
+        v["links"],
+        serde_json::json!([
+            {"text": "flagged", "url": "https://jobs.example.com/view/7?trk=a&ref=b"}
+        ])
+    );
+    // The text body still drops the href, which is why the flag exists.
+    assert!(v["body"].as_str().unwrap().contains("flagged"));
+    assert!(!v["body"].as_str().unwrap().contains("jobs.example.com"));
+
+    // Without the flag the field is absent, so the default JSON is unchanged.
+    let out = run_f(&f, &["read", "40", "--json"], &password_env());
+    assert!(json_ok(&out).get("links").is_none());
+
+    // A plain-text message has no links, and says so.
+    let out = run_f(&f, &["read", "10", "--json", "--links"], &password_env());
+    assert_eq!(json_ok(&out)["links"], serde_json::json!([]));
+
+    let out = run_f(&f, &["read", "40", "--links"], &password_env());
+    let text = text_ok(&out);
+    assert!(
+        text.contains("Links:\n  flagged  https://jobs.example.com/view/7?trk=a&ref=b"),
+        "{text}"
+    );
 }
 
 #[test]

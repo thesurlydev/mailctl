@@ -38,6 +38,18 @@ pub struct Message {
     pub attachments: Vec<String>,
     /// True when `body` was cut at the body limit.
     pub truncated: bool,
+    /// The links in the HTML part, only when `read --links` asked for them, so
+    /// the field is absent otherwise and the default JSON is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub links: Option<Vec<Link>>,
+}
+
+/// An anchor from an HTML message: its visible text and its `http(s)` URL.
+/// Untrusted text written by whoever sent the message.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Link {
+    pub text: String,
+    pub url: String,
 }
 
 /// `Name <addr>`, or just the address when the display name is absent.

@@ -65,7 +65,7 @@ Or from a checkout: `cargo build --release`, then copy `target/release/mailctl` 
 |---|---|
 | `folders` | List mailboxes with message and unread counts |
 | `list` | Recent messages in a mailbox, newest first. `--mailbox`, `--limit`, `--filter all\|unread` |
-| `read <uid>` | One message in full: decoded body, attachments named. `--mailbox`, `--body-limit <chars>` |
+| `read <uid>` | One message in full: decoded body, attachments named. `--mailbox`, `--body-limit <chars>`, `--links` (also the `http(s)` links of the HTML part, which the text body drops) |
 | `search` | By `--subject`, `--from`, `--body` or `--since YYYY-MM-DD`; terms AND together; empty terms are ignored |
 | `send` | Send a plain-text message: `--to`, `--cc`, `--bcc`, `--subject`, `--body` (`-` reads stdin), `--dry-run` |
 | `whoami` | Resolved settings, with the password redacted |
@@ -103,6 +103,11 @@ array of `{name, messages, unseen}`. `read` prints:
   "truncated": false
 }
 ```
+
+`read --links` adds `"links": [{"text": "...", "url": "https://..."}]`, the `http` and `https` anchors of the
+HTML part in document order (at most 200, a repeated URL once). The text body drops links, so a mail such as a job
+alert names its items there but only `--links` says where they point. Without the flag the field is absent.
+Link text and URLs are written by the sender: untrusted, and mailctl never fetches them.
 
 `date` is the time the server received the message. `body` is text written by the sender: untrusted.
 `send` prints `{"sent": true, "message_id": "<...>"}`. `send --dry-run` prints `{"sent": false,

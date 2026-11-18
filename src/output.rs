@@ -75,6 +75,19 @@ pub fn message(msg: &Message) -> String {
     if msg.truncated {
         let _ = writeln!(s, "\n[body truncated]");
     }
+    if let Some(links) = &msg.links {
+        let _ = writeln!(s, "\nLinks:");
+        if links.is_empty() {
+            let _ = writeln!(s, "  (none)");
+        }
+        for l in links {
+            if l.text.is_empty() {
+                let _ = writeln!(s, "  {}", l.url);
+            } else {
+                let _ = writeln!(s, "  {}  {}", l.text, l.url);
+            }
+        }
+    }
     s
 }
 
@@ -158,10 +171,45 @@ mod tests {
             body: "hello".into(),
             attachments: vec![],
             truncated: true,
+            links: None,
         };
         let text = message(&msg);
         assert!(text.contains("hello"));
         assert!(text.contains("[body truncated]"));
         assert!(!text.contains("Cc:"));
+        assert!(!text.contains("Links:"));
+    }
+
+    #[test]
+    fn message_lists_links_only_when_asked() {
+        let mut msg = Message {
+            uid: 1,
+            mailbox: "INBOX".into(),
+            from: "a@x".into(),
+            to: "b@y".into(),
+            cc: String::new(),
+            subject: "s".into(),
+            date: None,
+            message_id: None,
+            body: "hello".into(),
+            attachments: vec![],
+            truncated: false,
+            links: Some(vec![
+                crate::model::Link {
+                    text: "Staff Engineer".into(),
+                    url: "https://x.example/1".into(),
+                },
+                crate::model::Link {
+                    text: String::new(),
+                    url: "https://x.example/2".into(),
+                },
+            ]),
+        };
+        let text = message(&msg);
+        assert!(
+            text.contains("Links:\n  Staff Engineer  https://x.example/1\n  https://x.example/2\n")
+        );
+        msg.links = Some(vec![]);
+        assert!(message(&msg).contains("(none)"));
     }
 }

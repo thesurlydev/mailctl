@@ -26,6 +26,7 @@ use tokio::io::AsyncReadExt as _;
 mod config;
 mod error;
 mod imap;
+mod links;
 mod model;
 mod output;
 mod smtp;
@@ -84,6 +85,9 @@ enum Command {
         /// Cut the body after this many characters; 0 for no limit.
         #[arg(long, default_value_t = DEFAULT_BODY_LIMIT, value_name = "CHARS")]
         body_limit: usize,
+        /// Also list the links (text and URL) of the HTML part. The text body drops them.
+        #[arg(long)]
+        links: bool,
     },
     /// Search a mailbox. Terms are combined with AND.
     Search {
@@ -276,9 +280,10 @@ async fn dispatch(account: &Account, command: Command, json: bool) -> Result<()>
             uid,
             mailbox,
             body_limit,
+            links,
         } => {
             let msg = with_imap(account, async |s| {
-                imap::read(s, &mailbox, uid, body_limit).await
+                imap::read(s, &mailbox, uid, body_limit, links).await
             })
             .await?;
             if json {

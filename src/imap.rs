@@ -292,12 +292,14 @@ fn parse_row(
 }
 
 /// One message in full, with the body decoded and attachments named. The body
-/// is cut at `body_limit` characters (0 for no limit).
+/// is cut at `body_limit` characters (0 for no limit). With `with_links`, the
+/// links of the HTML part come back too, since the text body drops them.
 pub async fn read(
     session: &mut ImapSession,
     mailbox: &str,
     uid: Uid,
     body_limit: usize,
+    with_links: bool,
 ) -> Result<Message> {
     open(session, mailbox).await?;
 
@@ -319,14 +321,18 @@ pub async fn read(
     let raw = f
         .body()
         .ok_or_else(|| anyhow!("message {uid} carried no body"))?;
-    parse_message(
+    let mut msg = parse_message(
         raw,
         uid,
         mailbox,
         f.internal_date()
             .map(|d| d.format("%Y-%m-%d %H:%M").to_string()),
         body_limit,
-    )
+    )?;
+    if with_links {
+        msg.links = Some(crate::links::from_raw(raw));
+    }
+    Ok(msg)
 }
 
 /// Decode a raw RFC 5322 message. Pure, so the decoding rules are testable
@@ -375,6 +381,7 @@ pub fn parse_message(
         body,
         attachments,
         truncated,
+        links: None,
     })
 }
 
